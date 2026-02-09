@@ -2,13 +2,15 @@
   "projects": {
     "default": {
       "name": "My Paper",
-      "projectId": "YOUR_PROJECT_ID",
-      "gitToken": "YOUR_GIT_TOKEN"
+      "projectId": "YOUR_OVERLEAF_PROJECT_ID",
+      "gitToken": "YOUR_OVERLEAF_GIT_TOKEN"
     },
-    "project2": {
-      "name": "Another Paper",
-      "projectId": "ANOTHER_PROJECT_ID", 
-      "gitToken": "ANOTHER_GIT_TOKEN"
+    "selfhosted": {
+      "name": "Self Hosted Project",
+      "projectId": "PROJECT_ID",
+      "gitToken": "PASSWORD_OR_TOKEN",
+      "gitUsername": "USER_EMAIL_OR_GIT",
+      "gitBaseUrl": "https://overleaf.arbor-insight.com/git"
     }
   }
 }

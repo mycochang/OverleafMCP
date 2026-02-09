@@ -34,14 +34,18 @@ try {
 
 // Git operations helper
 class OverleafGitClient {
-  constructor(projectId, gitToken) {
+  constructor(projectId, gitToken, gitBaseUrl = 'https://git.overleaf.com', gitUsername = 'git') {
     if (!/^[a-zA-Z0-9-_]+$/.test(projectId)) {
         throw new Error('Invalid Project ID');
     }
     this.projectId = projectId;
-    this.gitToken = gitToken;
+    this.gitToken = gitToken; // Can be token or password
+    this.gitUsername = gitUsername;
     this.repoPath = path.join(os.tmpdir(), `overleaf-${projectId}`);
-    this.gitUrl = `https://git.overleaf.com/${projectId}`;
+    // Handle URL construction for standard vs self-hosted
+    // If gitBaseUrl ends with /, remove it
+    const baseUrl = gitBaseUrl.replace(/\/$/, '');
+    this.gitUrl = `${baseUrl}/${projectId}`;
   }
 
   async cloneOrPull() {
@@ -49,17 +53,47 @@ class OverleafGitClient {
       // Check if repo exists
       await access(path.join(this.repoPath, '.git'));
       // Pull latest changes
+      const env = { ...process.env, GIT_ASKPASS: 'echo', GIT_PASSWORD: this.gitToken };
+      if (this.gitUsername !== 'git') {
+         env.GIT_USERNAME = this.gitUsername;
+      }
+      
       const { stdout } = await execFile('git', ['pull'], {
         cwd: this.repoPath,
-        env: { ...process.env, GIT_ASKPASS: 'echo', GIT_PASSWORD: this.gitToken }
+        env
       });
       return stdout;
     } catch {
       // Clone repo
-      const cloneUrl = `https://git:${this.gitToken}@git.overleaf.com/${this.projectId}`;
-      const { stdout } = await execFile('git', ['clone', cloneUrl, this.repoPath]);
+      // Construct auth URL carefully
+      const urlObj = new URL(this.gitUrl);
+      urlObj.username = this.gitUsername;
+      urlObj.password = this.gitToken;
+      
+      const { stdout } = await execFile('git', ['clone', urlObj.toString(), this.repoPath]);
       return stdout;
     }
+  }
+
+  async writeFile(filePath, content) {
+    await this.cloneOrPull();
+    const fullPath = path.resolve(this.repoPath, filePath);
+    if (!fullPath.startsWith(path.resolve(this.repoPath))) {
+        throw new Error('Access denied: Path outside of project directory');
+    }
+    
+    // Write content
+    const { writeFile: fsWrite } = await import('fs/promises');
+    await fsWrite(fullPath, content, 'utf-8');
+    
+    // Git add, commit, push
+    const env = { ...process.env, GIT_ASKPASS: 'echo', GIT_PASSWORD: this.gitToken, GIT_AUTHOR_NAME: 'MCP Bot', GIT_AUTHOR_EMAIL: 'mcp@bot.local', GIT_COMMITTER_NAME: 'MCP Bot', GIT_COMMITTER_EMAIL: 'mcp@bot.local' };
+    
+    await execFile('git', ['add', filePath], { cwd: this.repoPath });
+    await execFile('git', ['commit', '-m', `Update ${filePath} via MCP`], { cwd: this.repoPath, env });
+    await execFile('git', ['push'], { cwd: this.repoPath, env });
+    
+    return `Successfully updated ${filePath}`;
   }
 
   async listFiles(extension = '.tex') {
@@ -133,7 +167,7 @@ function getProject(projectName = 'default') {
   if (!project) {
     throw new Error(`Project "${projectName}" not found in configuration`);
   }
-  return new OverleafGitClient(project.projectId, project.gitToken);
+  return new OverleafGitClient(project.projectId, project.gitToken, project.gitBaseUrl, project.gitUsername);
 }
 
 // List all projects
@@ -181,6 +215,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ['filePath'],
+        },
+      },
+      {
+        name: 'write_file',
+        description: 'Write content to a file in an Overleaf project (commits and pushes)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: {
+              type: 'string',
+              description: 'Path to the file',
+            },
+            content: {
+              type: 'string',
+              description: 'Content to write',
+            },
+            projectName: {
+              type: 'string',
+              description: 'Project identifier (optional)',
+            },
+          },
+          required: ['filePath', 'content'],
         },
       },
       {
@@ -283,6 +339,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: 'text',
               text: content,
+            },
+          ],
+        };
+      }
+
+      case 'write_file': {
+        const client = getProject(args.projectName);
+        const result = await client.writeFile(args.filePath, args.content);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: result,
             },
           ],
         };
