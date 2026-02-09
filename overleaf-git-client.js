@@ -1,11 +1,15 @@
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 const fs = require('fs').promises;
 const path = require('path');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 class OverleafGitClient {
     constructor(gitToken, projectId, tempDir = './temp') {
+        if (!/^[a-zA-Z0-9-_]+$/.test(projectId)) {
+            throw new Error('Invalid Project ID');
+        }
         this.gitToken = gitToken;
         this.projectId = projectId;
         this.tempDir = tempDir;
@@ -16,12 +20,13 @@ class OverleafGitClient {
     async cloneOrPull() {
         try {
             await fs.access(this.localPath);
-            await execAsync(`cd "${this.localPath}" && git pull`, { 
+            await execFileAsync('git', ['pull'], { 
+                cwd: this.localPath,
                 env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
             });
         } catch {
             await fs.mkdir(this.tempDir, { recursive: true });
-            await execAsync(`git clone "${this.repoUrl}" "${this.localPath}"`, {
+            await execFileAsync('git', ['clone', this.repoUrl, this.localPath], {
                 env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
             });
         }
@@ -50,7 +55,10 @@ class OverleafGitClient {
 
     async readFile(filePath) {
         await this.cloneOrPull();
-        const fullPath = path.join(this.localPath, filePath);
+        const fullPath = path.resolve(this.localPath, filePath);
+        if (!fullPath.startsWith(path.resolve(this.localPath))) {
+            throw new Error('Access denied: Path outside of project directory');
+        }
         return await fs.readFile(fullPath, 'utf8');
     }
 

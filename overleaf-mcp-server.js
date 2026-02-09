@@ -7,9 +7,9 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { spawn } from 'child_process';
-import { readFile } from 'fs/promises';
+import { readFile, access, mkdir } from 'fs/promises';
 import { promisify } from 'util';
-import { exec as execCallback } from 'child_process';
+import { exec as execCallback, execFile as execFileCallback } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import os from 'os';
@@ -18,6 +18,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const exec = promisify(execCallback);
+const execFile = promisify(execFileCallback);
 
 // Load projects configuration
 let projectsConfig;
@@ -34,6 +35,9 @@ try {
 // Git operations helper
 class OverleafGitClient {
   constructor(projectId, gitToken) {
+    if (!/^[a-zA-Z0-9-_]+$/.test(projectId)) {
+        throw new Error('Invalid Project ID');
+    }
     this.projectId = projectId;
     this.gitToken = gitToken;
     this.repoPath = path.join(os.tmpdir(), `overleaf-${projectId}`);
@@ -43,26 +47,24 @@ class OverleafGitClient {
   async cloneOrPull() {
     try {
       // Check if repo exists
-      await exec(`test -d "${this.repoPath}/.git"`);
+      await access(path.join(this.repoPath, '.git'));
       // Pull latest changes
-      const { stdout } = await exec(`cd "${this.repoPath}" && git pull`, {
+      const { stdout } = await execFile('git', ['pull'], {
+        cwd: this.repoPath,
         env: { ...process.env, GIT_ASKPASS: 'echo', GIT_PASSWORD: this.gitToken }
       });
       return stdout;
     } catch {
-      // Clone repo - Overleaf requires format: https://git:TOKEN@git.overleaf.com/PROJECT_ID
-      const { stdout } = await exec(
-        `git clone https://git:${this.gitToken}@git.overleaf.com/${this.projectId} "${this.repoPath}"`
-      );
+      // Clone repo
+      const cloneUrl = `https://git:${this.gitToken}@git.overleaf.com/${this.projectId}`;
+      const { stdout } = await execFile('git', ['clone', cloneUrl, this.repoPath]);
       return stdout;
     }
   }
 
   async listFiles(extension = '.tex') {
     await this.cloneOrPull();
-    const { stdout } = await exec(
-      `find "${this.repoPath}" -name "*${extension}" -type f`
-    );
+    const { stdout } = await execFile('find', [this.repoPath, '-name', `*${extension}`, '-type', 'f']);
     return stdout
       .split('\n')
       .filter(f => f)
@@ -71,7 +73,10 @@ class OverleafGitClient {
 
   async readFile(filePath) {
     await this.cloneOrPull();
-    const fullPath = path.join(this.repoPath, filePath);
+    const fullPath = path.resolve(this.repoPath, filePath);
+    if (!fullPath.startsWith(path.resolve(this.repoPath))) {
+        throw new Error('Access denied: Path outside of project directory');
+    }
     return await readFile(fullPath, 'utf-8');
   }
 
